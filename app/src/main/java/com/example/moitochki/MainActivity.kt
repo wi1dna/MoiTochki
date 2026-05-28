@@ -1184,26 +1184,57 @@ class MainActivity : AppCompatActivity() {
 
     private fun importKmz(uri: Uri) {
         lifecycleScope.launch(Dispatchers.IO) {
+            var importedCount = 0
+            var errorCount = 0
+            
             try {
                 contentResolver.openInputStream(uri)?.use { stream ->
                     val zis = ZipInputStream(stream)
                     var entry = zis.nextEntry
                     while (entry != null) {
                         if (entry.name.endsWith(".kml", true)) {
-                            val content = zis.bufferedReader().readText()
-                            val folderName = entry.name.removeSuffix(".kml").substringAfterLast("/").ifBlank { "Imported KMZ" }
-                            val fId = viewModel.insertFolderSync(folderName)
-                            parseKml(content, fId)
+                            try {
+                                val content = zis.bufferedReader().readText()
+                                val folderName = entry.name.removeSuffix(".kml").substringAfterLast("/").ifBlank { "Imported KMZ" }
+                                val fId = viewModel.insertFolderSync(folderName)
+                                val count = parseKml(content, fId)
+                                importedCount += count
+                            } catch (e: Exception) {
+                                errorCount++
+                                e.printStackTrace()
+                            }
                         }
                         entry = zis.nextEntry
                     }
                 }
-                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, getString(R.string.import_finished), Toast.LENGTH_SHORT).show() }
-            } catch (e: Exception) {}
+                
+                withContext(Dispatchers.Main) {
+                    when {
+                        errorCount > 0 && importedCount > 0 -> 
+                            Toast.makeText(this@MainActivity, "Импортировано: $importedCount, Ошибок: $errorCount", Toast.LENGTH_LONG).show()
+                        errorCount > 0 -> 
+                            Toast.makeText(this@MainActivity, "Ошибка импорта: проверьте формат файла", Toast.LENGTH_LONG).show()
+                        else -> 
+                            Toast.makeText(this@MainActivity, getString(R.string.import_finished), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
-    private fun parseKml(content: String, folderId: Long) {
+    /**
+     * Парсит KML содержимое и добавляет метки в базу данных
+     * @param content XML содержимое KML файла
+     * @param folderId ID папки для добавления меток
+     * @return Количество успешно импортированных меток
+     */
+    private fun parseKml(content: String, folderId: Long): Int {
+        var importedCount = 0
+        
         try {
             val factory = XmlPullParserFactory.newInstance()
             val xpp = factory.newPullParser()
@@ -1229,9 +1260,9 @@ class MainActivity : AppCompatActivity() {
                     XmlPullParser.TEXT -> {
                         if (inPlacemark) {
                             when (currentTag) {
-                                "name" -> currentName = xpp.text
-                                "description" -> currentDesc = xpp.text
-                                "coordinates" -> currentCoords = xpp.text
+                                "name" -> currentName = xpp.text ?: "Метка"
+                                "description" -> currentDesc = xpp.text ?: ""
+                                "coordinates" -> currentCoords = xpp.text ?: ""
                             }
                         }
                     }
@@ -1242,8 +1273,18 @@ class MainActivity : AppCompatActivity() {
                             if (coords.size >= 2) {
                                 val lon = coords[0].toDoubleOrNull()
                                 val lat = coords[1].toDoubleOrNull()
-                                if (lat != null && lon != null) {
-                                    viewModel.insertMarker(currentName, currentDesc, lat, lon, folderId)
+                                
+                                // Валидация координат
+                                if (lat != null && lon != null && 
+                                    lat in -90.0..90.0 && lon in -180.0..180.0) {
+                                    viewModel.insertMarker(
+                                        name = currentName.takeIf { it.isNotBlank() } ?: "Без названия",
+                                        description = currentDesc,
+                                        lat = lat,
+                                        lon = lon,
+                                        folderId = folderId
+                                    )
+                                    importedCount++
                                 }
                             }
                         }
@@ -1254,6 +1295,9 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            throw e
         }
+        
+        return importedCount
     }
 }
