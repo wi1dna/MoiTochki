@@ -1,15 +1,11 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.legacy.kapt)
+    alias(libs.plugins.kotlin.kapt)
 }
 
 android {
     namespace = "com.example.moitochki"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.moitochki"
